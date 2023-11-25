@@ -2,29 +2,48 @@
 pragma solidity ^0.8.20;
 
 // Importing OpenZeppelin's ERC721 and ERC20 interfaces, ReentrancyGuard, and Ownable contracts
-import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 // NFTMarketplace contract allows listing, buying, and selling of NFTs
 contract NFTMarketplace is ReentrancyGuard, Ownable {
+    using SafeERC20 for IERC20;
+
     // Structure for listing an NFT
     struct Listing {
-        address seller;
-        address tokenAddress;
-        uint256 tokenId;
-        uint256 price;
-        bool active;
+        uint256 tokenId; // 32 bytes
+        address seller; // 20 bytes
+        uint32 price; // 4 byte
+        address tokenAddress; // 20 bytes
+    }
+
+    struct MarketStatistics {
+        uint256 totalVolume;
+        uint256 averagePrice;
+        uint256 TotalListings;
+    }
+
+    modifier onlySeller(uint256 listingId) {
+        if (msg.sender != listings[listingId].seller) revert("Only seller");
+        _;
     }
 
     // ERC20 token used for payments
-    IERC20 public paymentToken;
-    // Array to store all listings
-    Listing[] public listings;
+    IERC20 public immutable paymentToken;
+    // stores the listings
+    mapping(uint256 => Listing) public listings;
+    // stores the total volume of seller
+    mapping(address => uint256) public totalVolumeBySeller;
 
     // Marketplace fee in basis points (1% default)
     uint256 public feeBasisPoints = 100;
+
+    uint256 public totalSold;
+    uint256 public totalVolume;
+    uint256 public totalListings;
+    uint256 public totalVolumeSold;
 
     // Events to log actions on the blockchain
     event ListingCreated(
@@ -56,77 +75,101 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         uint256 _tokenId,
         uint256 _price
     ) external nonReentrant {
+        if (_tokenAddress == address(0x0)) revert("Invalid address.");
+
         // Transfer the NFT to the contract for escrow
         IERC721(_tokenAddress).transferFrom(msg.sender, address(this), _tokenId);
-        // Add the new listing to the array
-        listings.push(Listing({
-            seller: msg.sender,
-            tokenAddress: _tokenAddress,
-            tokenId: _tokenId,
-            price: _price,
-            active: true
-        }));
+
+        // Add the new listing to the mapping
+        listings[totalListings] = Listing(
+            _tokenId, 
+            msg.sender, 
+            uint32(_price), 
+            _tokenAddress
+        );
+
+        totalVolume += _price;
+
         // Emit an event for the new listing
         emit ListingCreated(
-            listings.length - 1,
-            msg.sender,
-            _tokenAddress,
-            _tokenId,
+            totalListings, 
+            msg.sender, 
+            _tokenAddress, 
+            _tokenId, 
             _price
         );
+
+        totalListings++;
     }
 
     // Function to update the price of an existing listing
-    function updateListing(uint256 _listingId, uint256 _newPrice) external nonReentrant {
-        Listing storage listing = listings[_listingId];
-        // Ensure that only the seller can update the listing
-        require(msg.sender == listing.seller, "Only seller can update listing.");
-        // Ensure the listing is active
-        require(listing.active, "Listing is not active.");
+    function updateListing(uint256 _listingId, uint256 _newPrice) external onlySeller(_listingId) {
         // Update the listing price
-        listing.price = _newPrice;
+        listings[_listingId].price = uint32(_newPrice);
         // Emit an event for the listing update
         emit ListingUpdated(_listingId, _newPrice);
     }
 
     // Function to remove an existing listing
-    function removeListing(uint256 _listingId) external nonReentrant {
-        Listing storage listing = listings[_listingId];
-        // Ensure that only the seller can remove the listing
-        require(msg.sender == listing.seller, "Only seller can remove listing.");
-        // Ensure the listing is active
-        require(listing.active, "Listing is not active.");
+    function removeListing(uint256 _listingId) external nonReentrant onlySeller(_listingId) {
         // Transfer the NFT back to the seller
-        IERC721(listing.tokenAddress).transferFrom(address(this), listing.seller, listing.tokenId);
-        // Set the listing as inactive
-        listing.active = false;
+        IERC721(listings[_listingId].tokenAddress).transferFrom(
+            address(this),
+            listings[_listingId].seller, 
+            listings[_listingId].tokenId
+        );
+
+        totalVolume -= listings[_listingId].price;
+
+        // Remove listing
+        delete listings[_listingId];
+
+        totalListings--;
+
         // Emit an event for the listing removal
         emit ListingRemoved(_listingId);
     }
 
     // Function to buy an NFT from an active listing
     function buyNFT(uint256 _listingId) external nonReentrant {
-        Listing storage listing = listings[_listingId];
-        // Ensure the listing is active
-        require(listing.active, "Listing is not active.");
+        if (listings[_listingId].tokenAddress == address(0x0)) revert("Listing does not exist.");
+
+        uint256 price = listings[_listingId].price;
+
         // Calculate the fee and the amount going to the seller
-        uint256 fee = (listing.price * feeBasisPoints) / 10000;
-        uint256 sellerAmount = listing.price - fee;
+        uint256 fee = (price * feeBasisPoints) / 10000;
+        uint256 sellerAmount = price - fee;
+
         // Transfer the fee to the marketplace
-        require(paymentToken.transferFrom(msg.sender, address(this), fee), "Fee transfer failed.");
+        paymentToken.safeTransferFrom(msg.sender, address(this), fee);
+
         // Transfer the payment to the seller
-        require(paymentToken.transferFrom(msg.sender, listing.seller, sellerAmount), "Payment to seller failed.");
+        paymentToken.safeTransferFrom(msg.sender, listings[_listingId].seller, sellerAmount);
+        
         // Transfer the NFT to the buyer
-        IERC721(listing.tokenAddress).transferFrom(address(this), msg.sender, listing.tokenId);
-        // Set the listing as inactive
-        listing.active = false;
+        IERC721(listings[_listingId].tokenAddress).transferFrom(
+            address(this), 
+            msg.sender, 
+            listings[_listingId].tokenId
+        );
+
+        totalVolumeBySeller[listings[_listingId].seller] += price;
+        totalVolumeSold += price;
+        totalVolume -= price;
+
+        // remove listing
+        delete listings[_listingId];
+
+        totalListings--;
+        totalSold++;
+
         // Emit an event for the NFT sale
         emit NFTSold(
             _listingId,
             msg.sender,
-            listing.tokenAddress,
-            listing.tokenId,
-            listing.price
+            listings[_listingId].tokenAddress,
+            listings[_listingId].tokenId,
+            price
         );
     }
 
@@ -141,70 +184,60 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     function withdrawFees() external onlyOwner {
         uint256 balance = paymentToken.balanceOf(address(this));
         // Transfer the balance to the owner
-        require(paymentToken.transfer(msg.sender, balance), "Withdrawal failed.");
+        paymentToken.safeTransfer(msg.sender, balance);
+    }
+
+    // Function to get marketplace statistics such as total volume, average price, and total listings (live)
+    function getMarketplaceStatisticsLive() external view returns (MarketStatistics memory data) {
+        // Calculate average price if there are sold listings
+        uint256 averagePrice = totalListings > 0 ? totalVolume / totalListings : 0;
+
+        return data = MarketStatistics(
+            totalVolume,
+            averagePrice,
+            totalListings
+        );
+    }
+
+    // Function to get marketplace statistics such as total volume sold, average price, and total listings (sold)
+    function getMarketplaceStatisticsSold() external view returns (MarketStatistics memory data) {
+        uint256 averagePrice = totalSold > 0 ? totalVolumeSold / totalSold : 0;
+
+        return data = MarketStatistics(
+            totalVolumeSold,
+            averagePrice,
+            totalSold
+        );
     }
 
     // Function to get all active listings for a specific NFT contract
-    function getActiveListingsByContract(address _tokenAddress) public view returns (Listing[] memory) {
-        // Count active listings for the contract
-        uint256 activeCount = 0;
-        for (uint256 i = 0; i < listings.length; i++) {
-            if (listings[i].active && listings[i].tokenAddress == _tokenAddress) {
-                activeCount++;
-            }
-        }
+    function getListingsByContract(address _tokenAddress) external view returns (Listing[] memory) {
+        uint256 index;
 
-        // Create an array to hold the active listings
-        Listing[] memory activeListings = new Listing[](activeCount);
-        uint256 currentIndex = 0;
-        // Populate the array with active listings
-        for (uint256 i = 0; i < listings.length; i++) {
-            if (listings[i].active && listings[i].tokenAddress == _tokenAddress) {
-                activeListings[currentIndex] = listings[i];
-                currentIndex++;
+        Listing[] memory Listings = new Listing[](totalListings);
+
+        unchecked {
+            for (uint256 i; i < totalListings; i++) {
+                if (listings[i].tokenAddress == _tokenAddress) {
+                    Listings[index] = listings[i];
+                    index++;
+                }
             }
         }
-        return activeListings;
+        return Listings;
     }
 
-    // Function to get marketplace statistics such as total volume, average price, and total listings
-    function getMarketplaceStatistics() public view returns (uint256 totalVolume, uint256 averagePrice, uint256 totalListings) {
-        uint256 totalPrice = 0;
-        uint256 totalSold = 0;
-        // Loop through all listings to calculate statistics
-        for (uint256 i = 0; i < listings.length; i++) {
-            if (!listings[i].active) { // Assuming a listing is inactive once sold
-                totalSold++;
-                totalPrice += listings[i].price;
-            }
-        }
-        // Calculate average price if there are sold listings
-        averagePrice = totalSold > 0 ? totalPrice / totalSold : 0;
-        // Total listings is the length of the listings array
-        totalListings = listings.length;
-        // Total volume is the sum of all sold listing prices
-        totalVolume = totalPrice;
-        return (totalVolume, averagePrice, totalListings);
-    }
+    function getListingsBySeller(address _seller) external view returns (Listing[] memory) {
+        uint256 index;
 
-    // Function to get all active listings by a specific seller
-    function getActiveListingsBySeller(address _seller) public view returns (Listing[] memory) {
-        // Count active listings for the seller
-        uint256 activeCount = 0;
-        for (uint256 i = 0; i < listings.length; i++) {
-            if (listings[i].active && listings[i].seller == _seller) {
-                activeCount++;
-            }
-        }
+        Listing[] memory sellerListings = new Listing[](totalListings);
 
-        // Create an array to hold the seller's active listings
-        Listing[] memory sellerListings = new Listing[](activeCount);
-        uint256 currentIndex = 0;
-        // Populate the array with the seller's active listings
-        for (uint256 i = 0; i < listings.length; i++) {
-            if (listings[i].active && listings[i].seller == _seller) {
-                sellerListings[currentIndex] = listings[i];
-                currentIndex++;
+        unchecked {
+            for (uint256 i; i < totalListings; i++) {
+                if (listings[i].seller == _seller) {
+                    sellerListings[index] = listings[i];
+                    index++;
+                }
             }
         }
         return sellerListings;
