@@ -32,6 +32,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
 
     // ERC20 token used for payments
     IERC20 public immutable paymentToken;
+
     // stores the listings
     mapping(uint256 => Listing) public listings;
     // stores the total volume of seller
@@ -157,9 +158,6 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         totalVolumeSold += price;
         totalVolume -= price;
 
-        // remove listing
-        delete listings[_listingId];
-
         totalListings--;
         totalSold++;
 
@@ -171,6 +169,9 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
             listings[_listingId].tokenId,
             price
         );
+
+        // remove listing
+        delete listings[_listingId];
     }
 
     // Function for the owner to update the marketplace fee
