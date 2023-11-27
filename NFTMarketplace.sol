@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Importing OpenZeppelin's ERC721 and ERC20 interfaces, ReentrancyGuard, and Ownable contracts
+// Importing OpenZeppelin (v5.0) ERC721 and ERC20 interfaces, ReentrancyGuard, and Ownable contracts
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -15,14 +15,14 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     struct Listing {
         uint256 tokenId; // 32 bytes
         address seller; // 20 bytes
-        uint32 price; // 4 byte
+        uint32 price; // 4 bytes
         address tokenAddress; // 20 bytes
     }
 
-    struct MarketStatistics {
-        uint256 totalVolume;
+    struct Statistics {
+        uint256 aTotal;
         uint256 averagePrice;
-        uint256 TotalListings;
+        uint256 bTotal;
     }
 
     modifier onlySeller(uint256 listingId) {
@@ -32,15 +32,14 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
 
     // ERC20 token used for payments
     IERC20 public immutable paymentToken;
-
     // stores the listings
     mapping(uint256 => Listing) public listings;
     // stores the total volume of seller
     mapping(address => uint256) public totalVolumeBySeller;
-
     // Marketplace fee in basis points (1% default)
     uint256 public feeBasisPoints = 100;
 
+    // track info
     uint256 public totalSold;
     uint256 public totalVolume;
     uint256 public totalListings;
@@ -163,10 +162,10 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
 
         // Emit an event for the NFT sale
         emit NFTSold(
-            _listingId,
-            msg.sender,
-            listings[_listingId].tokenAddress,
-            listings[_listingId].tokenId,
+            _listingId, 
+            msg.sender, 
+            listings[_listingId].tokenAddress, 
+            listings[_listingId].tokenId, 
             price
         );
 
@@ -189,11 +188,10 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     }
 
     // Function to get marketplace statistics such as total volume, average price, and total listings (live)
-    function getMarketplaceStatisticsLive() external view returns (MarketStatistics memory data) {
-        // Calculate average price if there are sold listings
+    function getMarketplaceStatisticsLive() external view returns (Statistics memory data) {
         uint256 averagePrice = totalListings > 0 ? totalVolume / totalListings : 0;
 
-        return data = MarketStatistics(
+        return data = Statistics(
             totalVolume,
             averagePrice,
             totalListings
@@ -201,10 +199,10 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     }
 
     // Function to get marketplace statistics such as total volume sold, average price, and total listings (sold)
-    function getMarketplaceStatisticsSold() external view returns (MarketStatistics memory data) {
+    function getMarketplaceStatisticsSold() external view returns (Statistics memory data) {
         uint256 averagePrice = totalSold > 0 ? totalVolumeSold / totalSold : 0;
 
-        return data = MarketStatistics(
+        return data = Statistics(
             totalVolumeSold,
             averagePrice,
             totalSold
