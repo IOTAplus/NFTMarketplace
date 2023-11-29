@@ -6,6 +6,7 @@ import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 // NFTMarketplace contract allows listing, buying, and selling of NFTs
 contract NFTMarketplace is ReentrancyGuard, Ownable {
@@ -84,7 +85,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
         listings[totalListings] = Listing(
             _tokenId, 
             msg.sender, 
-            uint32(_price), 
+            SafeCast.toUint32(_price), // safeCast for test
             _tokenAddress
         );
 
@@ -105,7 +106,7 @@ contract NFTMarketplace is ReentrancyGuard, Ownable {
     // Function to update the price of an existing listing
     function updateListing(uint256 _listingId, uint256 _newPrice) external onlySeller(_listingId) {
         // Update the listing price
-        listings[_listingId].price = uint32(_newPrice);
+        listings[_listingId].price = SafeCast.toUint32(_newPrice); // safeCast for test
         // Emit an event for the listing update
         emit ListingUpdated(_listingId, _newPrice);
     }
